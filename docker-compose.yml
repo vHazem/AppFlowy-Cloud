@@ -1,54 +1,64 @@
-# Essential services for AppFlowy Cloud
+# Essential services for AppFlowy Cloud — Railway Optimized
+# ✅ Uses Railway PostgreSQL (postgres.railway.internal)
+# ✅ Removes all local postgres dependencies
+# ✅ Adds startup delay for cold-start reliability
+
+version: '3.8'
 
 services:
   nginx:
     restart: on-failure
-    image: nginx
+    image: nginx:alpine
     ports:
-      - ${NGINX_PORT:-80}:80   # Disable this if you are using TLS
+      - ${NGINX_PORT:-80}:80
       - ${NGINX_TLS_PORT:-443}:443
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./nginx/ssl/certificate.crt:/etc/nginx/ssl/certificate.crt
-      - ./nginx/ssl/private_key.key:/etc/nginx/ssl/private_key.key
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/ssl/certificate.crt:/etc/nginx/ssl/certificate.crt:ro
+      - ./nginx/ssl/private_key.key:/etc/nginx/ssl/private_key.key:ro
+    depends_on:
+      - appflowy_cloud
+      - gotrue
 
-  # You do not need this if you have configured to use your own s3 file storage
+  # You do not need this if you have configured to use your own S3 file storage
   minio:
     restart: on-failure
     image: minio/minio
     environment:
-      - MINIO_BROWSER_REDIRECT_URL=${APPFLOWY_BASE_URL?:err}/minio
+      - MINIO_BROWSER_REDIRECT_URL=${APPFLOWY_BASE_URL}/minio
       - MINIO_ROOT_USER=${APPFLOWY_S3_ACCESS_KEY:-minioadmin}
       - MINIO_ROOT_PASSWORD=${APPFLOWY_S3_SECRET_KEY:-minioadmin}
     command: server /data --console-address ":9001"
     volumes:
       - minio_data:/data
 
-  postgres:
-    restart: on-failure
-    image: pgvector/pgvector:pg16
-    environment:
-      - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_DB=${POSTGRES_DB:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
-      - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
-    healthcheck:
-      test: [ "CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}" ]
-      interval: 5s
-      timeout: 5s
-      retries: 12
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+  # === POSTGRES SERVICE DISABLED ===
+  # Using Railway PostgreSQL instead
+  # postgres:
+  #   restart: on-failure
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     - POSTGRES_USER=${POSTGRES_USER:-postgres}
+  #     - POSTGRES_DB=${POSTGRES_DB:-postgres}
+  #     - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-password}
+  #     - POSTGRES_HOST=${POSTGRES_HOST:-postgres}
+  #   healthcheck:
+  #     test: [ "CMD", "pg_isready", "-U", "${POSTGRES_USER}", "-d", "${POSTGRES_DB}" ]
+  #     interval: 5s
+  #     timeout: 5s
+  #     retries: 12
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
 
   redis:
     restart: on-failure
-    image: redis
+    image: redis:alpine
 
   gotrue:
     restart: on-failure
+    # ⚠️ Removed postgres dependency — connects via DATABASE_URL env var
     depends_on:
-      postgres:
-        condition: service_healthy
+      - redis
     healthcheck:
       test: "curl --fail http://127.0.0.1:9999/health || exit 1"
       interval: 5s
@@ -56,54 +66,43 @@ services:
       retries: 12
     image: appflowyinc/gotrue:${GOTRUE_VERSION:-latest}
     environment:
-      # There are a lot of options to configure GoTrue. You can reference the example config:
-      # https://github.com/supabase/auth/blob/master/example.env
-      # The initial GoTrue Admin user to create, if not already exists.
       - GOTRUE_ADMIN_EMAIL=${GOTRUE_ADMIN_EMAIL}
-      # The initial GoTrue Admin user password to create, if not already exists.
-      # If the user already exists, the update will be skipped.
       - GOTRUE_ADMIN_PASSWORD=${GOTRUE_ADMIN_PASSWORD}
       - GOTRUE_DISABLE_SIGNUP=${GOTRUE_DISABLE_SIGNUP:-false}
-      - GOTRUE_SITE_URL=appflowy-flutter://                           # redirected to AppFlowy application
-      - GOTRUE_URI_ALLOW_LIST=** # adjust restrict if necessary
-      - GOTRUE_JWT_SECRET=${GOTRUE_JWT_SECRET}                        # authentication secret
+      - GOTRUE_SITE_URL=${GOTRUE_SITE_URL}
+      - GOTRUE_URI_ALLOW_LIST=**
+      - GOTRUE_JWT_SECRET=${GOTRUE_JWT_SECRET}
       - GOTRUE_JWT_EXP=${GOTRUE_JWT_EXP}
-      # Without this environment variable, the createuser command will create an admin
-      # with the `admin` role as opposed to `supabase_admin`
       - GOTRUE_JWT_ADMIN_GROUP_NAME=supabase_admin
       - GOTRUE_DB_DRIVER=postgres
-      - API_EXTERNAL_URL=${API_EXTERNAL_URL}
       - DATABASE_URL=${GOTRUE_DATABASE_URL}
       - PORT=9999
-      - GOTRUE_SMTP_HOST=${GOTRUE_SMTP_HOST}                          # e.g. smtp.gmail.com
-      - GOTRUE_SMTP_PORT=${GOTRUE_SMTP_PORT}                          # e.g. 465
-      - GOTRUE_SMTP_USER=${GOTRUE_SMTP_USER}                          # email sender, e.g. noreply@appflowy.io
-      - GOTRUE_SMTP_PASS=${GOTRUE_SMTP_PASS}                          # email password
+      - GOTRUE_SMTP_HOST=${GOTRUE_SMTP_HOST}
+      - GOTRUE_SMTP_PORT=${GOTRUE_SMTP_PORT}
+      - GOTRUE_SMTP_USER=${GOTRUE_SMTP_USER}
+      - GOTRUE_SMTP_PASS=${GOTRUE_SMTP_PASS}
       - GOTRUE_MAILER_URLPATHS_CONFIRMATION=/gotrue/verify
       - GOTRUE_MAILER_URLPATHS_INVITE=/gotrue/verify
       - GOTRUE_MAILER_URLPATHS_RECOVERY=/gotrue/verify
       - GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE=/gotrue/verify
       - GOTRUE_MAILER_TEMPLATES_MAGIC_LINK=${GOTRUE_MAILER_TEMPLATES_MAGIC_LINK}
-      - GOTRUE_SMTP_ADMIN_EMAIL=${GOTRUE_SMTP_ADMIN_EMAIL}                # email with admin privileges e.g. internal@appflowy.io
-      - GOTRUE_SMTP_MAX_FREQUENCY=${GOTRUE_SMTP_MAX_FREQUENCY:-1ns}       # set to 1ns for running tests
-      - GOTRUE_RATE_LIMIT_EMAIL_SENT=${GOTRUE_RATE_LIMIT_EMAIL_SENT:-100} # number of email sendable per minute
-      - GOTRUE_MAILER_AUTOCONFIRM=${GOTRUE_MAILER_AUTOCONFIRM:-false}     # change this to true to skip email confirmation
-      # Google OAuth config
+      - GOTRUE_SMTP_ADMIN_EMAIL=${GOTRUE_SMTP_ADMIN_EMAIL}
+      - GOTRUE_SMTP_MAX_FREQUENCY=${GOTRUE_SMTP_MAX_FREQUENCY:-1ns}
+      - GOTRUE_RATE_LIMIT_EMAIL_SENT=${GOTRUE_RATE_LIMIT_EMAIL_SENT:-100}
+      - GOTRUE_MAILER_AUTOCONFIRM=${GOTRUE_MAILER_AUTOCONFIRM:-false}
+      # OAuth
       - GOTRUE_EXTERNAL_GOOGLE_ENABLED=${GOTRUE_EXTERNAL_GOOGLE_ENABLED}
       - GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID=${GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID}
       - GOTRUE_EXTERNAL_GOOGLE_SECRET=${GOTRUE_EXTERNAL_GOOGLE_SECRET}
       - GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI=${GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI}
-      # GITHUB OAuth config
       - GOTRUE_EXTERNAL_GITHUB_ENABLED=${GOTRUE_EXTERNAL_GITHUB_ENABLED}
       - GOTRUE_EXTERNAL_GITHUB_CLIENT_ID=${GOTRUE_EXTERNAL_GITHUB_CLIENT_ID}
       - GOTRUE_EXTERNAL_GITHUB_SECRET=${GOTRUE_EXTERNAL_GITHUB_SECRET}
       - GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI=${GOTRUE_EXTERNAL_GITHUB_REDIRECT_URI}
-      # Discord OAuth config
       - GOTRUE_EXTERNAL_DISCORD_ENABLED=${GOTRUE_EXTERNAL_DISCORD_ENABLED}
       - GOTRUE_EXTERNAL_DISCORD_CLIENT_ID=${GOTRUE_EXTERNAL_DISCORD_CLIENT_ID}
       - GOTRUE_EXTERNAL_DISCORD_SECRET=${GOTRUE_EXTERNAL_DISCORD_SECRET}
       - GOTRUE_EXTERNAL_DISCORD_REDIRECT_URI=${GOTRUE_EXTERNAL_DISCORD_REDIRECT_URI}
-      # SAML 2.0 OAuth config
       - GOTRUE_SAML_ENABLED=${GOTRUE_SAML_ENABLED}
       - GOTRUE_SAML_PRIVATE_KEY=${GOTRUE_SAML_PRIVATE_KEY}
 
@@ -139,8 +138,15 @@ services:
       - APPFLOWY_WEB_URL=${APPFLOWY_WEB_URL}
     image: appflowyinc/appflowy_cloud:${APPFLOWY_CLOUD_VERSION:-latest}
     depends_on:
-      gotrue:
-        condition: service_healthy
+      - gotrue
+      - redis
+    # ⚠️ CRITICAL: Wait for Railway PostgreSQL to wake up
+    command: >
+      sh -c "
+      echo '⏳ Waiting 30s for Railway PostgreSQL to wake up...' &&
+      sleep 30 &&
+      echo '🚀 Starting AppFlowy Cloud...' &&
+      ./appflowy-cloud"
 
   admin_frontend:
     restart: on-failure
@@ -152,10 +158,8 @@ services:
       - ADMIN_FRONTEND_APPFLOWY_CLOUD_URL=${ADMIN_FRONTEND_APPFLOWY_CLOUD_URL:-http://appflowy_cloud:8000}
       - ADMIN_FRONTEND_PATH_PREFIX=${ADMIN_FRONTEND_PATH_PREFIX:-}
     depends_on:
-      gotrue:
-        condition: service_healthy
-      appflowy_cloud:
-        condition: service_started
+      - gotrue
+      - appflowy_cloud
 
   ai:
     restart: on-failure
@@ -163,8 +167,8 @@ services:
     environment:
       - AI_SERVER_PORT=${AI_SERVER_PORT}
       - OPENAI_API_KEY=${AI_OPENAI_API_KEY}
-      - DEFAULT_AI_MODEL=gpt-4.1-mini # Make sure the model is available in your OpenAI account
-      - DEFAULT_AI_COMPLETION_MODEL=gpt-4.1-mini # Make sure the model is available in your OpenAI account
+      - DEFAULT_AI_MODEL=gpt-4o-mini
+      - DEFAULT_AI_COMPLETION_MODEL=gpt-4o-mini
       - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
       - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
       - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
@@ -185,10 +189,8 @@ services:
       retries: 3
       start_period: 40s
     depends_on:
-      postgres:
-        condition: service_healthy
-      appflowy_cloud:
-        condition: service_started
+      # ⚠️ Removed postgres dependency
+      - appflowy_cloud
 
   appflowy_worker:
     restart: on-failure
@@ -214,8 +216,8 @@ services:
       - APPFLOWY_MAILER_SMTP_PASSWORD=${APPFLOWY_MAILER_SMTP_PASSWORD}
       - APPFLOWY_MAILER_SMTP_TLS_KIND=${APPFLOWY_MAILER_SMTP_TLS_KIND}
     depends_on:
-      postgres:
-        condition: service_healthy
+      # ⚠️ Removed postgres dependency
+      - redis
 
   appflowy_web:
     restart: on-failure
@@ -226,6 +228,7 @@ services:
       - APPFLOWY_BASE_URL=${APPFLOWY_BASE_URL}
       - APPFLOWY_GOTRUE_BASE_URL=${APPFLOWY_BASE_URL}/gotrue
       - APPFLOWY_WS_BASE_URL=${APPFLOWY_WEBSOCKET_BASE_URL}
+
 volumes:
-  postgres_data:
+  # postgres_data:  ← Commented out since not using local postgres
   minio_data:
